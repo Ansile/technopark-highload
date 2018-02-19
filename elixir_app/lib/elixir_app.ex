@@ -2,73 +2,106 @@ defmodule Server do
   @listener 80
   @path "/Users/ansile/http-test-suite"
 
+  @stream_buffer_size 16384
+
   def start do
     IO.puts @listener
-    server = Socket.TCP.listen!(@listener)
+    server = Socket.TCP.listen!(@listener, options: [:nodelay])
 
     processClient(server)
   end
 
   def processClient(server) do
+    timestamp = :os.system_time(:milli_seconds)
     client = server |> Socket.accept!()
+    timestamp2 = :os.system_time(:milli_seconds)
 
-    processRequest(client)
+    if (timestamp2 - timestamp) >= 100 do
+      IO.puts "Too slow in acception"
+      IO.puts timestamp2 - timestamp
+    end
 
-    client |> Socket.Stream.close()
+    main = Task.async(Server, :processRequest, [client, true])
+#    processRequest(client, true)
+    Task.await(main, 100)
+
+#    spawn(Server, :processRequest, [client, true])
 
     processClient(server)
   end
 
-  def processRequest( client) do
-    request_payload = client |> Socket.Stream.recv!()
-
-    try do
-      request = Request.fromString!(request_payload)
-
-      send_through_socket = fn (arg) -> Socket.Stream.send!(client, arg) end
-
-      if(request[:path] |> String.contains?("../")) do
-        raise HTTP404
-      end
-      if (request[:method] == :undefined) do
-        raise HTTP405
-      end
-
-      path = cond do
-        #TODO: check whether the path may not contain a leading slash
-  #        String.last(@path) == "/" -> "#{@path}#{String.replace_prefix(request[:path], "/", "")}"
-          true -> "#{@path}#{request[:path]}"
-      end
-
-      IO.puts request[:path]
-
-      IO.puts path
-
-      IO.puts request[:method]
-
-      file = File.stream!(path, [], 16384)
-
-      fileLength = case File.stat(path) do
-        {:ok, %{size: fileLength}} -> fileLength
-        {:error, _reason} -> raise chooseException(path)
-      end
-
-      IO.puts fileLength
-
-      Response.responseString(200, "", fileLength, MIME.Types.path(request[:path])) |> send_through_socket.()
-
-      if(request[:method] == :GET) do
-        :ok = Enum.each(file, &Socket.Stream.send(client, &1))
-      end
-    rescue
-      HTTP400 -> client |> Socket.Stream.send(Response.responseString(400))
-      HTTP403 -> client |> Socket.Stream.send(Response.responseString(403))
-      HTTP404 -> client |> Socket.Stream.send(Response.responseString(404))
-      HTTP405 -> client |> Socket.Stream.send(Response.responseString(405))
+  def processRequest(client, stub \\ false) do
+    send_through_socket = fn (arg) -> Socket.Stream.send!(client, arg) end
+    timestamp = :os.system_time(:milli_seconds)
+    request_payload = client |> Socket.Stream.recv!([timeout: 99])
+    timestamp2 = :os.system_time(:milli_seconds)
+    if (timestamp2 - timestamp) >= 100 do
+      IO.puts "Too slow in stream"
+      IO.puts timestamp2 - timestamp
     end
+
+    if (!stub) do
+      try do
+        request = Request.fromString!(request_payload)
+
+
+        if(request[:path] |> String.contains?("../")) do
+          raise HTTP404
+        end
+        if (request[:method] == :undefined) do
+          raise HTTP405
+        end
+
+        path = cond do
+          #TODO: check whether the path may not contain a leading slash
+    #        String.last(@path) == "/" -> "#{@path}#{String.replace_prefix(request[:path], "/", "")}"
+            true -> "#{@path}#{request[:path]}"
+        end
+
+        IO.puts request[:path]
+
+        IO.puts path
+
+        IO.puts request[:method]
+  #
+        file = File.stream!(path, [], @stream_buffer_size)
+
+        fileLength = case File.stat(path) do
+          {:ok, %{size: fileLength}} -> fileLength
+          {:error, reason} -> raise chooseException(path, reason)
+        end
+
+        IO.puts fileLength
+
+        Response.responseString(200, "", fileLength, MIME.Types.path(request[:path])) |> send_through_socket.()
+
+        if(request[:method] == :GET) do
+  #        Socket.Stream.io!(client, file)
+          :ok = Enum.each(file, &Socket.Stream.send(client, &1))
+        end
+      rescue
+        HTTP400 -> client |> Socket.Stream.send(Response.responseString(400))
+        HTTP403 -> client |> Socket.Stream.send(Response.responseString(403))
+        HTTP404 -> client |> Socket.Stream.send(Response.responseString(404))
+        HTTP405 -> client |> Socket.Stream.send(Response.responseString(405))
+      after
+        client |> Socket.Stream.close()
+      end
+      else
+        Response.stub() |> send_through_socket.()
+        client |> Socket.Stream.close()
+      end
+
+      timestamp3 = :os.system_time(:milli_seconds)
+      if (timestamp3 - timestamp2) >= 100 do
+        IO.puts "Too slow elsewhere"
+        IO.puts timestamp3 - timestamp2
+      end
   end
 
-  def chooseException(path) do
+  def chooseException(path, reason \\ "") do
+    IO.puts path
+    IO.puts reason
     case path |> String.ends_with?("index.html") do
       false -> HTTP404
       true -> HTTP403
@@ -118,7 +151,7 @@ end
 defmodule Response do
   def responseString(code, status \\ "", content_length \\ false, content_type \\ false) do
     metaData = "HTTP/1.1 #{code} #{status}\r\n"
-    date = "Date: #{elem(Timex.format(Timex.now, "{RFC1123}"), 0)}\r\n"
+    date = "Date: #{elem(Timex.format(Timex.now, "{RFC1123}"), 1)}\r\n"
     server = "Server: highload-corutines\r\n"
     connection = "Connection: Close\r\n"
 
@@ -134,6 +167,14 @@ defmodule Response do
     end
 
     Enum.join([metaData, date, server, connection, contentLen, contentType])
+  end
+
+  def stub() do
+    metaData = "HTTP/1.1 200\r\n"
+    server = "Server: highload-corutines\r\n"
+    connection = "Connection: Close\r\n"
+
+    Enum.join([metaData, server, connection])
   end
 end
 
