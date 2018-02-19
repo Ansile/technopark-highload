@@ -6,14 +6,16 @@ defmodule Server do
 
   def start do
     IO.puts @listener
-    server = Socket.TCP.listen!(@listener, options: [:nodelay])
-
+#    server = Socket.TCP.listen!(@listener, options: [:nodelay])
+    {:ok, server} = :gen_tcp.listen(@listener, [:binary, {:packet, 0}, {:active, false}])
     processClient(server)
   end
 
   def processClient(server) do
     timestamp = :os.system_time(:milli_seconds)
-    client = server |> Socket.accept!()
+#    client = server |> Socket.accept!()
+    {:ok, client} = :gen_tcp.accept(server)
+
     timestamp2 = :os.system_time(:milli_seconds)
 
     if (timestamp2 - timestamp) >= 100 do
@@ -21,14 +23,33 @@ defmodule Server do
       IO.puts timestamp2 - timestamp
     end
 
-    main = Task.async(Server, :processRequest, [client, true])
+
+
+#    {:ok, request} = do_recv(client, [])
+    {:ok, binary} = :gen_tcp.recv(client, 0)
+
+    timestamp3 = :os.system_time(:milli_seconds)
+    if (timestamp3 - timestamp2) >= 100 do
+      IO.puts "Too slow in receiving data"
+      IO.puts timestamp3 - timestamp2
+    end
+
+#    main = Task.async(Server, :processRequest, [client, true])
 #    processRequest(client, true)
-    Task.await(main, 100)
+#    Task.await(main, 100)
 
 #    spawn(Server, :processRequest, [client, true])
 
+    :ok = :gen_tcp.close(client)
     processClient(server)
   end
+
+#  def do_recv(sock, bs) do
+#      case :gen_tcp.recv(sock, 0) do
+#        {:ok, b} -> do_recv(sock, [bs, b])
+#        {:error, closed} -> {:ok, :erlang.list_to_brinary(bs)}
+#      end
+#  end
 
   def processRequest(client, stub \\ false) do
     send_through_socket = fn (arg) -> Socket.Stream.send!(client, arg) end
