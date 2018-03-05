@@ -27,7 +27,9 @@ ADD ./elixir_app .
 COPY core-counter.py .
 
 RUN yes | mix deps.get
+
+RUN mix compile
 EXPOSE 80
 
-CMD ELIXIR_CPU_CORES=`python core-counter.py` && elixir --erl "+S $ELIXIR_CPU_CORES" -S mix run -e Server.startd
+CMD ELIXIR_CPU_CORES=`python core-counter.py` && elixir --erl "+S $ELIXIR_CPU_CORES" -S mix run -e Server.start
 #&& ab -n 9000 -c 100 localhost/httptest/dir2/page.html
