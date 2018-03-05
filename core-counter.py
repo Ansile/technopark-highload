@@ -1,9 +1,7 @@
 import multiprocessing
 import os
 
-dir = os.path.dirname(__file__)
-
-with open(os.path.join(dir, 'httpd.conf')) as config:
+with open('/etc/httpd.conf') as config:
     config_dict = dict()
     for line in config:
         line_parts = line.split()
