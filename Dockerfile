@@ -17,7 +17,7 @@ RUN set -xe \
 
 RUN apt-get update
 
-RUN apt-get install apache2-utils python
+RUN apt-get install -y apache2-utils python
 
 ENV WORK /highload_server
 WORKDIR $WORK/
