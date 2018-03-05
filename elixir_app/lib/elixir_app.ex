@@ -1,20 +1,34 @@
 defmodule Server do
-  @listener 80
-  @path "/Users/ansile/http-test-suite"
+  @default_listener_port 80
+  @default_file_path "../content"
+  @config_path "../httpd.conf"
 
-  @stream_buffer_size 16384
+  @stream_buffer_size 64 * 1024
+
+  @debug false
 
   def start do
-    IO.puts @listener
-#    server = Socket.TCP.listen!(@listener, options: [:nodelay])
-    {:ok, server} = :gen_tcp.listen(@listener, [:binary, {:packet, 0}, {:active, false}])
-    processClient(server)
+    config = ConfigReader.parseToMap(@config_path)
+
+    port = case Integer.parse(config["listen"]) do
+      { number, _ } -> number
+      :error -> @default_listener_port
+    end
+
+    server = Socket.TCP.listen!(port, options: [:nodelay])
+    IO.puts inspect server
+#    {:ok, lsock} = :gen_tcp.listen(5678, [:binary, {:packet, 0}, {:active, false}])
+
+#    IO.puts inspect lsock
+    processClient(server, config["document_root"] || @default_file_path)
   end
 
-  def processClient(server) do
+  def processClient(server, fileFolder) do
     timestamp = :os.system_time(:milli_seconds)
 #    client = server |> Socket.accept!()
-    {:ok, client} = :gen_tcp.accept(server)
+
+    {:ok, client_erl} = server |> :gen_tcp.accept()
+#    IO.puts inspect client_erl
 
     timestamp2 = :os.system_time(:milli_seconds)
 
@@ -23,128 +37,137 @@ defmodule Server do
       IO.puts timestamp2 - timestamp
     end
 
+    spawn(Server, :processRequest, [client_erl, fileFolder])
 
-
-#    {:ok, request} = do_recv(client, [])
-    {:ok, binary} = :gen_tcp.recv(client, 0)
-
-    timestamp3 = :os.system_time(:milli_seconds)
-    if (timestamp3 - timestamp2) >= 100 do
-      IO.puts "Too slow in receiving data"
-      IO.puts timestamp3 - timestamp2
-    end
-
-#    main = Task.async(Server, :processRequest, [client, true])
-#    processRequest(client, true)
-#    Task.await(main, 100)
-
-#    spawn(Server, :processRequest, [client, true])
-
-    :ok = :gen_tcp.close(client)
-    processClient(server)
+    processClient(server, fileFolder)
   end
 
-#  def do_recv(sock, bs) do
-#      case :gen_tcp.recv(sock, 0) do
-#        {:ok, b} -> do_recv(sock, [bs, b])
-#        {:error, closed} -> {:ok, :erlang.list_to_brinary(bs)}
-#      end
-#  end
+  def processMockErlang(client) do
+#    :gen_tcp.recv(client, 0)
+#    IO.puts inspect client
+    do_recv(client, [])
+#    :gen_tcp.
+    :ok = :gen_tcp.close(client)
+  end
 
-  def processRequest(client, stub \\ false) do
+  def do_recv(sock, bs) do
+    case :gen_tcp.recv(sock, 0) do
+         {:ok, nil} -> do_recv(sock, bs)
+         {:ok, ""} -> do_recv(sock, bs)
+         {:ok, b} -> {:ok, b}
+         {:error, closed} -> IO.puts inspect{:closed, :erlang.list_to_binary(bs)}
+    end
+  end
+
+  def processMockElixir(client) do
+    request_payload = client |> Socket.Stream.recv!()
+    client |> Socket.Stream.close()
+  end
+
+  def processRequest(client, fileFolder) do
     send_through_socket = fn (arg) -> Socket.Stream.send!(client, arg) end
     timestamp = :os.system_time(:milli_seconds)
-    request_payload = client |> Socket.Stream.recv!([timeout: 99])
+    request_payload = client |> Socket.Stream.recv!()
     timestamp2 = :os.system_time(:milli_seconds)
     if (timestamp2 - timestamp) >= 100 do
       IO.puts "Too slow in stream"
       IO.puts timestamp2 - timestamp
     end
-
-    if (!stub) do
-      try do
-        request = Request.fromString!(request_payload)
+    try do
+      request = Request.fromString!(request_payload)
 
 
-        if(request[:path] |> String.contains?("../")) do
-          raise HTTP404
-        end
-        if (request[:method] == :undefined) do
-          raise HTTP405
-        end
+      if(request[:path] |> String.contains?("../")) do
+        raise HTTP404
+      end
+      if (request[:method] == :undefined) do
+        raise HTTP405
+      end
 
-        path = cond do
-          #TODO: check whether the path may not contain a leading slash
-    #        String.last(@path) == "/" -> "#{@path}#{String.replace_prefix(request[:path], "/", "")}"
-            true -> "#{@path}#{request[:path]}"
-        end
+      path = cond do
+        #TODO: check whether the path may not contain a leading slash
+  #        String.last(@path) == "/" -> "#{@path}#{String.replace_prefix(request[:path], "/", "")}"
+          true -> "#{fileFolder}#{request[:path]}"
+      end
 
+      if (@debug) do
         IO.puts request[:path]
 
         IO.puts path
 
         IO.puts request[:method]
-  #
-        file = File.stream!(path, [], @stream_buffer_size)
+      end
+#
+      file = File.stream!(path, [], @stream_buffer_size)
 
-        fileLength = case File.stat(path) do
-          {:ok, %{size: fileLength}} -> fileLength
-          {:error, reason} -> raise chooseException(path, reason)
-        end
+      fileLength = case File.stat(path) do
+        {:ok, %{size: fileLength}} -> fileLength
+        {:error, reason} -> raise chooseException(path, reason)
+      end
 
+      if (@debug) do
         IO.puts fileLength
-
-        Response.responseString(200, "", fileLength, MIME.Types.path(request[:path])) |> send_through_socket.()
-
-        if(request[:method] == :GET) do
-  #        Socket.Stream.io!(client, file)
-          :ok = Enum.each(file, &Socket.Stream.send(client, &1))
-        end
-      rescue
-        HTTP400 -> client |> Socket.Stream.send(Response.responseString(400))
-        HTTP403 -> client |> Socket.Stream.send(Response.responseString(403))
-        HTTP404 -> client |> Socket.Stream.send(Response.responseString(404))
-        HTTP405 -> client |> Socket.Stream.send(Response.responseString(405))
-      after
-        client |> Socket.Stream.close()
-      end
-      else
-        Response.stub() |> send_through_socket.()
-        client |> Socket.Stream.close()
       end
 
-      timestamp3 = :os.system_time(:milli_seconds)
-      if (timestamp3 - timestamp2) >= 100 do
-        IO.puts "Too slow elsewhere"
-        IO.puts timestamp3 - timestamp2
+      Response.responseString(200, "", fileLength, MIME.Types.path(request[:path])) |> send_through_socket.()
+
+      if(request[:method] == :GET) do
+#        Socket.Stream.io!(client, file)
+        :ok = Enum.each(file, &Socket.Stream.send(client, &1))
       end
+    rescue
+      HTTP400 -> client |> Socket.Stream.send(Response.responseString(400))
+      HTTP403 -> client |> Socket.Stream.send(Response.responseString(403))
+      HTTP404 -> client |> Socket.Stream.send(Response.responseString(404))
+      HTTP405 -> client |> Socket.Stream.send(Response.responseString(405))
+    after
+      client |> Socket.Stream.close()
+    end
+
+    timestamp3 = :os.system_time(:milli_seconds)
+    if (timestamp3 - timestamp2) >= 100 do
+      IO.puts "Too slow elsewhere"
+      IO.puts timestamp3 - timestamp2
+    end
   end
 
   def chooseException(path, reason \\ "") do
-    IO.puts path
-    IO.puts reason
+    if (@debug) do
+      IO.puts path
+      IO.puts reason
+    end
     case path |> String.ends_with?("index.html") do
       false -> HTTP404
       true -> HTTP403
     end
   end
+
+  def outputCPULimit() do
+    IO.puts ConfigReader.parseToMap(@config_path)["cpu_limit"]
+  end
 end
 
 
 defmodule Request do
+  @debug false
+
   def fromString!(string) do
-    lines = String.split(string, "\n")
+    IO.puts string
     try do
+      lines = String.split(string, "\n")
       [method, pathString, protocol | _] = String.split(hd(lines))
 
       [path|_] = String.split(pathString, "?")
 
-      IO.puts(method)
+      if(@debug) do
+        IO.puts(method)
+      end
 
       filePath = URI.decode(path)
 
-
-      Enum.each(lines, &IO.puts/1)
+      if(@debug) do
+        Enum.each(lines, &IO.puts/1)
+      end
 
       %{:method => RequestMethod.fromString(method), :path => resolveFilePath(filePath)}
     rescue
@@ -197,20 +220,4 @@ defmodule Response do
 
     Enum.join([metaData, server, connection])
   end
-end
-
-defmodule HTTP400 do
-  defexception message: "HTTP 400 Bad Request"
-end
-
-defmodule HTTP403 do
-  defexception message: "HTTP 404 Forbidden"
-end
-
-defmodule HTTP404 do
-  defexception message: "HTTP 404 Not Found"
-end
-
-defmodule HTTP405 do
-  defexception message: "HTTP 405 Method Not Allowed"
 end
