@@ -1,9 +1,11 @@
+require Logger
+
 defmodule Server do
   @default_listener_port 80
   @default_file_path "../content"
   @config_path "../httpd.conf"
 
-  @stream_buffer_size 64 * 1024
+  @stream_buffer_size 128 * 1024
 
   @debug false
 
@@ -15,27 +17,18 @@ defmodule Server do
       :error -> @default_listener_port
     end
 
-    server = Socket.TCP.listen!(port, options: [:nodelay])
-    IO.puts inspect server
-#    {:ok, lsock} = :gen_tcp.listen(5678, [:binary, {:packet, 0}, {:active, false}])
+#    server = Socket.TCP.listen!(port, options: [:nodelay])
+    {:ok, server} = :gen_tcp.listen(port, [:binary, packet: 0, active: false, reuseaddr: true])
+    Logger.info inspect server
 
 #    IO.puts inspect lsock
     processClient(server, config["document_root"] || @default_file_path)
   end
 
   def processClient(server, fileFolder) do
-    timestamp = :os.system_time(:milli_seconds)
-#    client = server |> Socket.accept!()
 
-    {:ok, client_erl} = server |> :gen_tcp.accept()
-#    IO.puts inspect client_erl
-
-    timestamp2 = :os.system_time(:milli_seconds)
-
-    if (timestamp2 - timestamp) >= 100 do
-      IO.puts "Too slow in acception"
-      IO.puts timestamp2 - timestamp
-    end
+    {:ok, client_erl} = :gen_tcp.accept(server)
+#    Logger.info inspect client_erl
 
     spawn(Server, :processRequest, [client_erl, fileFolder])
 
@@ -45,7 +38,7 @@ defmodule Server do
   def processMockErlang(client) do
 #    :gen_tcp.recv(client, 0)
 #    IO.puts inspect client
-    do_recv(client, [])
+    IO.puts inspect do_recv(client, [])
 #    :gen_tcp.
     :ok = :gen_tcp.close(client)
   end
@@ -55,7 +48,7 @@ defmodule Server do
          {:ok, nil} -> do_recv(sock, bs)
          {:ok, ""} -> do_recv(sock, bs)
          {:ok, b} -> {:ok, b}
-         {:error, closed} -> IO.puts inspect{:closed, :erlang.list_to_binary(bs)}
+         {:error, :closed} -> {:ok, :erlang.list_to_binary(bs)}
     end
   end
 
@@ -66,13 +59,8 @@ defmodule Server do
 
   def processRequest(client, fileFolder) do
     send_through_socket = fn (arg) -> Socket.Stream.send!(client, arg) end
-    timestamp = :os.system_time(:milli_seconds)
-    request_payload = client |> Socket.Stream.recv!()
-    timestamp2 = :os.system_time(:milli_seconds)
-    if (timestamp2 - timestamp) >= 100 do
-      IO.puts "Too slow in stream"
-      IO.puts timestamp2 - timestamp
-    end
+    {:ok, request_payload} = client |> do_recv([])
+
     try do
       request = Request.fromString!(request_payload)
 
@@ -123,12 +111,6 @@ defmodule Server do
     after
       client |> Socket.Stream.close()
     end
-
-    timestamp3 = :os.system_time(:milli_seconds)
-    if (timestamp3 - timestamp2) >= 100 do
-      IO.puts "Too slow elsewhere"
-      IO.puts timestamp3 - timestamp2
-    end
   end
 
   def chooseException(path, reason \\ "") do
@@ -152,7 +134,6 @@ defmodule Request do
   @debug false
 
   def fromString!(string) do
-    IO.puts string
     try do
       lines = String.split(string, "\n")
       [method, pathString, protocol | _] = String.split(hd(lines))
@@ -172,6 +153,7 @@ defmodule Request do
       %{:method => RequestMethod.fromString(method), :path => resolveFilePath(filePath)}
     rescue
       MatchError -> raise HTTP400
+      FunctionClauseError -> exit('')
     end
   end
 
