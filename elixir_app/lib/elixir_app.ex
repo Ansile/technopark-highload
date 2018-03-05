@@ -3,7 +3,7 @@ require Logger
 defmodule Server do
   @default_listener_port 80
   @default_file_path "../content"
-  @config_path "../httpd.conf"
+  @config_path "/etc/httpd.conf"
 
   @stream_buffer_size 128 * 1024
 
