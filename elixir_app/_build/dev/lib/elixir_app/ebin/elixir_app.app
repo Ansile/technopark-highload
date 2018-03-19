@@ -1,0 +1,10 @@
+{application,elixir_app,
+             [{applications,[kernel,stdlib,elixir,logger,socket,timex,mime]},
+              {description,"elixir_app"},
+              {modules,['Elixir.ConfigReader','Elixir.HTTP400',
+                        'Elixir.HTTP403','Elixir.HTTP404','Elixir.HTTP405',
+                        'Elixir.Request','Elixir.RequestMethod',
+                        'Elixir.Response','Elixir.Server']},
+              {registered,[]},
+              {vsn,"0.1.0"},
+              {extra_applications,[logger]}]}.
